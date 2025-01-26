@@ -1,0 +1,203 @@
+package com.example.myrenamer
+
+import android.Manifest
+import android.content.pm.PackageManager
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.pdf.PdfDocument
+import android.net.Uri
+import android.os.Bundle
+import android.os.Environment
+import android.widget.Button
+import android.widget.Toast
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import java.io.*
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
+
+class MainActivity : AppCompatActivity() {
+
+    private lateinit var filePickerLauncher: ActivityResultLauncher<String>
+    private lateinit var certificatePickerLauncher: ActivityResultLauncher<String>
+    private lateinit var names: List<String>
+    private lateinit var certificateUri: Uri
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_main)
+
+        // Request storage permissions
+        checkAndRequestPermissions()
+
+        try {
+            // Initialize buttons
+            val uploadTextFileBtn: Button = findViewById(R.id.uploadTextFileBtn)
+            val uploadCertificateBtn: Button = findViewById(R.id.uploadCertificateBtn)
+            val downloadCertificateBtn: Button = findViewById(R.id.downloadCertificateBtn)
+
+            // File picker for text files
+            filePickerLauncher =
+                registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+                    if (uri != null) {
+                        readTextFile(uri)
+                    } else {
+                        Toast.makeText(this, "No file selected!", Toast.LENGTH_SHORT).show()
+                    }
+                }
+
+            // File picker for certificate template
+            certificatePickerLauncher =
+                registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+                    if (uri != null) {
+                        certificateUri = uri
+                        Toast.makeText(
+                            this,
+                            "Certificate file selected: $uri",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    } else {
+                        Toast.makeText(this, "No certificate file selected!", Toast.LENGTH_SHORT).show()
+                    }
+                }
+
+            // Set OnClickListeners
+            uploadTextFileBtn.setOnClickListener {
+                filePickerLauncher.launch("text/plain")
+            }
+
+            uploadCertificateBtn.setOnClickListener {
+                certificatePickerLauncher.launch("*/*")
+            }
+
+            downloadCertificateBtn.setOnClickListener {
+                if (::names.isInitialized && ::certificateUri.isInitialized) {
+                    generateCertificates(names)
+                    downloadAllCertificates()
+                } else {
+                    Toast.makeText(
+                        this,
+                        "Please upload both a text file and a certificate template!",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Toast.makeText(this, "Initialization error: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun checkAndRequestPermissions() {
+        val permissions = arrayOf(
+            Manifest.permission.WRITE_EXTERNAL_STORAGE,
+            Manifest.permission.READ_EXTERNAL_STORAGE
+        )
+        val permissionsToRequest = permissions.filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }
+        if (permissionsToRequest.isNotEmpty()) {
+            ActivityCompat.requestPermissions(this, permissionsToRequest.toTypedArray(), 1001)
+        }
+    }
+
+    private fun readTextFile(uri: Uri) {
+        try {
+            val inputStream = contentResolver.openInputStream(uri)
+            val reader = BufferedReader(InputStreamReader(inputStream))
+
+            // Read names line by line
+            names = reader.useLines { lines ->
+                lines.filter { it.isNotBlank() }.map { it.trim() }.toList()
+            }
+
+            Toast.makeText(this, "Loaded ${names.size} names!", Toast.LENGTH_SHORT).show()
+
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Toast.makeText(this, "Failed to read the file!", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun generateCertificates(names: List<String>) {
+        // Create a folder in the Downloads directory
+        val outputDir = File(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+            "MyCertificates"
+        )
+
+        // Ensure the folder exists
+        if (!outputDir.exists()) {
+            outputDir.mkdirs()
+        }
+
+        if (outputDir.exists()) {
+            for (name in names) {
+                try {
+                    // Create a new PDF file for each name
+                    val pdfFile = File(outputDir, "${name.replace(" ", "_")}.pdf")
+
+                    // Use PDFDocument or any library to generate the certificate
+                    val pdfDocument = PdfDocument()
+                    val pageInfo = PdfDocument.PageInfo.Builder(595, 842, 1).create() // A4 size
+                    val page = pdfDocument.startPage(pageInfo)
+
+                    // Draw the name on the certificate
+                    val canvas = page.canvas
+                    val paint = Paint()
+                    paint.textSize = 36f
+                    paint.color = Color.BLACK
+
+                    // Position the name in the certificate (adjust coordinates as needed)
+                    canvas.drawText(name, 200f, 400f, paint)
+
+                    pdfDocument.finishPage(page)
+
+                    // Write the document to a file
+                    FileOutputStream(pdfFile).use { output ->
+                        pdfDocument.writeTo(output)
+                    }
+
+                    pdfDocument.close()
+
+                    Toast.makeText(this, "Saved: ${pdfFile.absolutePath}", Toast.LENGTH_SHORT).show()
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                    Toast.makeText(this, "Error generating PDF for $name", Toast.LENGTH_SHORT).show()
+                }
+            }
+        } else {
+            Toast.makeText(this, "Failed to create output directory!", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+
+    private fun downloadAllCertificates() {
+        try {
+            val outputDir = getExternalFilesDir("Certificates")
+            if (outputDir != null && outputDir.isDirectory) {
+                val zipFile = File(outputDir.parent, "Certificates.zip")
+
+                ZipOutputStream(FileOutputStream(zipFile)).use { zos ->
+                    outputDir.listFiles()?.forEach { file ->
+                        val entry = ZipEntry(file.name)
+                        zos.putNextEntry(entry)
+                        file.inputStream().use { input -> input.copyTo(zos) }
+                        zos.closeEntry()
+                    }
+                }
+
+                Toast.makeText(this, "Certificates zipped at: ${zipFile.absolutePath}", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, "No certificates to download!", Toast.LENGTH_SHORT).show()
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Toast.makeText(this, "Failed to zip certificates: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+}
